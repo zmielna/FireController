@@ -65,7 +65,9 @@ static bool initMax31856() {
 }
 
 static bool initBmp280() {
-    if (!bmp.begin(0x76)) {
+    // Breakout boards differ: most default to 0x76, some (incl. many
+    // Adafruit/GY-BMP280 clones with SDO pulled high) sit at 0x77.
+    if (!bmp.begin(0x76) && !bmp.begin(0x77)) {
         return false;
     }
     bmp.setSampling(
@@ -85,7 +87,20 @@ void Sensors::init() {
     if (maxFault) Serial.println("MAX31856 init FAILED");
 
     bmpFault = !initBmp280();
-    if (bmpFault) Serial.println("BMP280 init FAILED");
+    if (bmpFault) {
+        Serial.println("BMP280 init FAILED - scanning I2C bus for connected devices:");
+        int found = 0;
+        for (uint8_t addr = 1; addr < 127; addr++) {
+            Wire.beginTransmission(addr);
+            if (Wire.endTransmission() == 0) {
+                Serial.printf("  device found at 0x%02X\n", addr);
+                found++;
+            }
+        }
+        if (found == 0) {
+            Serial.println("  no I2C devices found at all - check SDA/SCL wiring and power");
+        }
+    }
 
     unsigned long now = millis();
     lastMaxRetryMs = now;
