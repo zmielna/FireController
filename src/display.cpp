@@ -35,27 +35,21 @@ void Display::update() {
 
     oled.clearDisplay();
     oled.setCursor(0, 0);
-    oled.println("FireController v1.1");
+    oled.println("FireController v1.2");
 
     oled.setCursor(0, 12);
-    oled.printf("Temp: %.1f C", Sensors::getExhaustTemp());
+    oled.printf("Exhaust: %.0fC  d:%+.1f", Sensors::getExhaustTemp(), Sensors::getExhaustTrend());
 
     oled.setCursor(0, 22);
     oled.printf("Press: %.0f hPa", Sensors::getInletPressure());
 
     oled.setCursor(0, 32);
-    oled.printf("Intake: %s%s",
-        Actuator::isOpen() ? "OPEN" : "CLOSED",
-        Actuator::isSafetyBlocked() ? " (LOCK)" : "");
+    oled.printf("Intake: %.0f%%%s",
+        Actuator::getCurrentPosition(),
+        Actuator::isSafetyOverridden() ? " (SAFE)" : "");
 
     oled.setCursor(0, 44);
-    if (Safety::isOverheat()) {
-        oled.println("Safety: OVERHEAT!");
-    } else if (Safety::isSensorFault()) {
-        oled.println("Safety: SENSOR ERR");
-    } else {
-        oled.println("Safety: OK");
-    }
+    oled.printf("Safety: %s", Safety::stateToString(Safety::getState()));
 
     oled.setCursor(0, 54);
     oled.printf("MQTT: %s  BTN: %s",

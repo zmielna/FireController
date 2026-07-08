@@ -15,19 +15,28 @@ PubSubClient mqttClient(espClient);
 static unsigned long lastPublish = 0;
 static unsigned long lastWifiAttempt = 0;
 static unsigned long lastMqttAttempt = 0;
+static String currentPhase = "czuwanie";
 
 static void onMqttMessage(char* topic, byte* payload, unsigned int length) {
-    if (strcmp(topic, MQTT_TOPIC_SET_INTAKE) != 0) {
+    // Any inbound message counts as proof HA/broker are alive, independent
+    // of which topic it is or whether it parses cleanly.
+    Safety::notifyMqttSeen();
+
+    if (strcmp(topic, MQTT_TOPIC_SET_INTAKE) == 0) {
+        JsonDocument doc;
+        if (deserializeJson(doc, payload, length)) return;
+        if (!doc["position"].isNull()) {
+            Actuator::setDesiredPosition(doc["position"].as<float>());
+        }
         return;
     }
 
-    JsonDocument doc;
-    if (deserializeJson(doc, payload, length)) {
+    if (strcmp(topic, MQTT_TOPIC_PHASE) == 0) {
+        char buf[32] = {0};
+        size_t n = length < sizeof(buf) - 1 ? length : sizeof(buf) - 1;
+        memcpy(buf, payload, n);
+        currentPhase = String(buf);
         return;
-    }
-
-    if (doc["open"].is<bool>()) {
-        Actuator::setDesired(doc["open"].as<bool>());
     }
 }
 
@@ -64,6 +73,8 @@ static void ensureConnected() {
 
     if (mqttClient.connect(MQTT_CLIENT_ID)) {
         mqttClient.subscribe(MQTT_TOPIC_SET_INTAKE);
+        mqttClient.subscribe(MQTT_TOPIC_PHASE);
+        Safety::notifyMqttSeen();
     }
 }
 
@@ -95,19 +106,17 @@ void MQTTHandler::publishStatus() {
 
     auto sensors = doc["sensors"].to<JsonObject>();
     sensors["exhaust_temp_c"] = Sensors::getExhaustTemp();
+    sensors["exhaust_trend_c_per_min"] = Sensors::getExhaustTrend();
     sensors["inlet_temp_c"] = Sensors::getInletTemp();
     sensors["inlet_pressure_hpa"] = Sensors::getInletPressure();
 
     auto safety = doc["safety"].to<JsonObject>();
-    safety["state"] = Safety::isOverheat() ? "overheat" :
-                      Safety::isSensorFault() ? "sensor_fault" : "ok";
-    safety["overheat"] = Safety::isOverheat();
-    safety["sensor_fault"] = Safety::isSensorFault();
+    safety["state"] = Safety::stateToString(Safety::getState());
 
     auto actuator = doc["actuator"].to<JsonObject>();
-    actuator["open"] = Actuator::isOpen();
-    actuator["desired_open"] = Actuator::isDesiredOpen();
-    actuator["safety_blocked"] = Actuator::isSafetyBlocked();
+    actuator["position_pct"] = Actuator::getCurrentPosition();
+    actuator["desired_position_pct"] = Actuator::getDesiredPosition();
+    actuator["safety_overridden"] = Actuator::isSafetyOverridden();
 
     auto system = doc["system"].to<JsonObject>();
     system["uptime_s"] = millis() / 1000;
@@ -126,4 +135,8 @@ void MQTTHandler::publishStatus() {
 
 bool MQTTHandler::isConnected() {
     return mqttClient.connected();
+}
+
+String MQTTHandler::getPhase() {
+    return currentPhase;
 }

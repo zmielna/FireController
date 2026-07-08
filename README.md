@@ -74,42 +74,49 @@ pio run -t upload
 pio device monitor
 ```
 
-## Gaps and issues
+## Actuator
 
-## Adding LED
+Cable-actuated damper (Jotul i570 fresh-air intake), servo-driven, 40mm
+throw between 0% and 100%. Calibrate `SERVO_MIN_US`/`SERVO_MAX_US` in
+`config.h` on the bench before connecting the cable.
 
-Dioda LED RGB WS2812B (1 szt.) – jako szybki wskaźnik stanu:
+## Safety model
 
-- 🟢 normalna praca
-- 🔵 rozpalanie
-- 🟡 wygaszanie
-- 🔴 alarm
+Graduated priority hierarchy, evaluated locally on the ESP32 every loop,
+independent of WiFi/MQTT/HA:
 
-### Critical — will block real operation
+1. **Sensor fault** → fail OPEN (100%). An unknown reading is never treated
+   as safe-to-restrict.
+2. **Critical overheat** (≥380°C) → hard close to `MIN_SAFE_POSITION_PCT`
+   (never fully closed).
+3. **High-temp limit** (≥320°C) → soft ceiling on max opening, doesn't
+   override a lower value already requested.
+4. **MQTT lost** (>5 min silence) → moderate opening if the fire is active,
+   full open if cold/unknown.
+5. **Normal** → HA/manual control has full authority.
 
-- No actuator control
-The name and description refer to an “air-intake actuator,” but there is no relay, servo, PWM, or stepper logic. Today this is sense + display + publish, not control.
+## Status LED (WS2812B)
 
-### Incomplete logic
+- 🟢 normal operation (or phase not yet known)
+- 🔵 `rozpalanie` (from HA via `MQTT_TOPIC_PHASE`)
+- 🟡 `wygaszanie` (from HA via `MQTT_TOPIC_PHASE`)
+- 🔴 blinking — any safety alarm tier (fault / high-limit / critical)
+- 🟣 pulsing — MQTT lost
 
-- Safety sensor fault is a stub — sensorFault is hardcoded to false:
+## Known gaps
 
-```
-safety.cpp
-Lines 9-12
-void Safety::update() {
-    overheat = Sensors::getExhaustTemp() > 250.0f;
-    sensorFault = false; // Placeholder
-}
-```
-
-- Sensors::isMaxFault() and isBmpFault() exist but are never used here or in the MQTT safety block.
-- No safety response to overheat — overheat is detected and shown, but nothing shuts down or limits an actuator (since there isn’t one yet).
-
-
-### Minor / polish
-
-- No explicit Wire.begin(I2C_SDA, I2C_SCL) — often works on ESP32 via library defaults, but explicit init is safer.
-- Hard-coded secrets/config — WiFi SSID/password and MQTT auth are missing from config.h (expected for now, but needed for deployment).
-- README inconsistencies — mentions empty include/ folder; MQTT section formatting is broken; trailing typo in platformio.ini description (.o).
-- No tests — no unit tests or hardware-in-loop checks.
+- **No AUTO/MANUAL lock.** Button presses and MQTT position commands both
+  write to the same `desiredPosition` — whichever arrives last wins. A
+  physical button press can be silently overwritten by the next HA update.
+  Needs an explicit mode flag (long-press to toggle, as originally discussed)
+  before this is safe to rely on day-to-day.
+- **No OLED screen rotation / long-press handling** — single static screen,
+  no AUTO/MANUAL indication on-device.
+- **No Preferences (NVS) persistence** — mode and last position are lost on
+  reboot; always restarts fail-open at 100%.
+- **PubSubClient is synchronous** — `mqttClient.loop()` blocks briefly on
+  network I/O; fine at this scale, but a stall on a bad connection will
+  delay `Sensors::update()`/`Safety::update()` in the same loop iteration.
+  The graduated safety checks still run every loop and are not skipped by
+  this, but their *cadence* can jitter under network stress.
+- **No tests** — no unit tests or hardware-in-loop checks.
