@@ -3,6 +3,7 @@
 #include "sensors.h"
 #include "safety.h"
 #include "button.h"
+#include "actuator.h"
 #include "mqtt_handler.h"
 #include <Arduino.h>
 #include <Wire.h>
@@ -13,6 +14,7 @@
 #define SCREEN_HEIGHT 64
 
 static Adafruit_SSD1306 oled(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire);
+static unsigned long lastRefreshMs = 0;
 
 void Display::init() {
     if (!oled.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
@@ -25,17 +27,28 @@ void Display::init() {
 }
 
 void Display::update() {
+    unsigned long now = millis();
+    if (now - lastRefreshMs < DISPLAY_REFRESH_MS) {
+        return;
+    }
+    lastRefreshMs = now;
+
     oled.clearDisplay();
     oled.setCursor(0, 0);
-    oled.println("FireController v1.0");
+    oled.println("FireController v1.1");
 
-    oled.setCursor(0, 16);
+    oled.setCursor(0, 12);
     oled.printf("Temp: %.1f C", Sensors::getExhaustTemp());
 
-    oled.setCursor(0, 26);
+    oled.setCursor(0, 22);
     oled.printf("Press: %.0f hPa", Sensors::getInletPressure());
 
-    oled.setCursor(0, 40);
+    oled.setCursor(0, 32);
+    oled.printf("Intake: %s%s",
+        Actuator::isOpen() ? "OPEN" : "CLOSED",
+        Actuator::isSafetyBlocked() ? " (LOCK)" : "");
+
+    oled.setCursor(0, 44);
     if (Safety::isOverheat()) {
         oled.println("Safety: OVERHEAT!");
     } else if (Safety::isSensorFault()) {
@@ -44,8 +57,8 @@ void Display::update() {
         oled.println("Safety: OK");
     }
 
-    oled.setCursor(0, 52);
-    oled.printf("MQTT: %s   BTN: %s",
+    oled.setCursor(0, 54);
+    oled.printf("MQTT: %s  BTN: %s",
         MQTTHandler::isConnected() ? "OK" : "NO",
         Button::isPressed() ? "X" : "-");
 

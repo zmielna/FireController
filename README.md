@@ -27,7 +27,11 @@ It integrates thermocouple temperature sensing, pressure measurement, safety log
   - Home Assistant friendly
 
 - **Modular architecture**  
-  - `sensors/`, `safety/`, `display/`, `mqtt_handler/`, `button/`
+  - `sensors/`, 
+    `safety/`, 
+    `display/`, 
+    `mqtt_handler/`, 
+    `button/`
 
 ---
 
@@ -68,12 +72,54 @@ PlatformIO libraries:
 pio run
 pio run -t upload
 pio device monitor
+```
 
-MQTT Topic
+## Gaps and issues
 
-firecontroller/status
+## Adding LED
 
-Payload includes sensors, safety, system metrics, and button state.
+Dioda LED RGB WS2812B (1 szt.) – jako szybki wskaźnik stanu:
 
+- 🟢 normalna praca
+- 🔵 rozpalanie
+- 🟡 wygaszanie
+- 🔴 alarm
 
-If you want, I can also generate a **[detailed README](ca://s?q=Generate_detailed_README_for_FireController)** with wiring diagrams, installation steps, and Home Assistant integration.
+### Critical — will block real operation
+
+- No WiFi initialization
+mqtt_handler.cpp uses WiFi and WiFi.RSSI(), but nothing calls WiFi.begin(). MQTT cannot connect without network setup.
+
+- Missing PubSubClient dependency
+The code includes <PubSubClient.h>, and the README lists it, but platformio.ini does not declare it in lib_deps. A clean build may fail unless it is added manually.
+
+- No actuator control
+The name and description refer to an “air-intake actuator,” but there is no relay, servo, PWM, or stepper logic. Today this is sense + display + publish, not control.
+
+### Incomplete logic
+
+- Safety sensor fault is a stub — sensorFault is hardcoded to false:
+
+```
+safety.cpp
+Lines 9-12
+void Safety::update() {
+    overheat = Sensors::getExhaustTemp() > 250.0f;
+    sensorFault = false; // Placeholder
+}
+```
+
+- Sensors::isMaxFault() and isBmpFault() exist but are never used here or in the MQTT safety block.
+
+- No safety response to overheat — overheat is detected and shown, but nothing shuts down or limits an actuator (since there isn’t one yet).
+
+- No MQTT command handling — publish-only; no subscriptions for remote control.
+
+### Minor / polish
+
+- No button debouncing — raw digitalRead every loop.
+- Display refreshes every loop — no rate limiting; fine at small scale, but unnecessary I2C traffic.
+- No explicit Wire.begin(I2C_SDA, I2C_SCL) — often works on ESP32 via library defaults, but explicit init is safer.
+- Hard-coded secrets/config — WiFi SSID/password and MQTT auth are missing from config.h (expected for now, but needed for deployment).
+- README inconsistencies — mentions empty include/ folder; MQTT section formatting is broken; trailing typo in platformio.ini description (.o).
+- No tests — no unit tests or hardware-in-loop checks.

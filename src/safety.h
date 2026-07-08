@@ -6,4 +6,5 @@ namespace Safety {
 
     bool isOverheat();
     bool isSensorFault();
+    bool isSafe();
 }

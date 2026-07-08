@@ -5,4 +5,5 @@ namespace Button {
     void update();
 
     bool isPressed();
+    bool wasPressed();
 }

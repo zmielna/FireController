@@ -1,6 +1,7 @@
 #include "sensors.h"
 #include "config.h"
 #include <Arduino.h>
+#include <Wire.h>
 #include <Adafruit_MAX31856.h>
 #include <Adafruit_BMP280.h>
 
@@ -19,6 +20,8 @@ static bool maxFault = false;
 static bool bmpFault = false;
 
 void Sensors::init() {
+    Wire.begin(I2C_SDA, I2C_SCL);
+
     // ---- MAX31856 ----
     if (!max31856.begin()) {
         Serial.println("MAX31856 init FAILED");
