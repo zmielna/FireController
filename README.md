@@ -1,7 +1,17 @@
 # FireController
 
 FireController is an ESP32‑based control and monitoring system for a fireplace air‑intake actuator.  
-It integrates thermocouple temperature sensing, pressure measurement, safety logic, MQTT telemetry, and an OLED UI.
+It integrates thermocouple temperature sensing, pressure measurement, safety logic, MQTT telemetry, status LED and OLED display.
+
+---
+
+## Quick Start
+
+1. cp src/config_template.h src/config.h
+2. edit WiFi details in src/config.h
+3. edit MQTT details in src/config.h
+4. pio run -t upload
+5. pio device monitor
 
 ---
 
@@ -201,3 +211,38 @@ independent of WiFi/MQTT/HA:
   The graduated safety checks still run every loop and are not skipped by
   this, but their *cadence* can jitter under network stress.
 - **No tests** — no unit tests or hardware-in-loop checks.
+
+## To do
+
+### StartupReport
+
+New files:
+
+- src/startup_report.h
+- src/startup_report.cpp
+
+```txt
+================================================
+
+FireController
+Version : 0.2.0
+
+CPU      : ESP32
+Clock    : 240 MHz
+Flash    : 4 MB
+Heap     : 287 kB
+
+Scanning I2C...
+
+0x3C  SSD1306
+0x76  BMP280
+
+OLED      OK
+BMP280    OK
+MAX31856  Missing
+
+WiFi      Disabled
+MQTT      Waiting
+
+================================================
+```
