@@ -1,3 +1,4 @@
+#include "config.h"
 #include "display.h"
 #include "sensors.h"
 #include "safety.h"
