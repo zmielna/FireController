@@ -1,17 +1,7 @@
 # FireController
 
 FireController is an ESP32‑based control and monitoring system for a fireplace air‑intake actuator.  
-It integrates thermocouple temperature sensing, pressure measurement, safety logic, MQTT telemetry, status LED and OLED display.
-
----
-
-## Quick Start
-
-1. cp src/config_template.h src/config.h
-2. edit WiFi details in src/config.h
-3. edit MQTT details in src/config.h
-4. pio run -t upload
-5. pio device monitor
+It integrates thermocouple temperature sensing, pressure measurement, safety logic, MQTT telemetry, and an OLED UI.
 
 ---
 
@@ -63,11 +53,13 @@ FireController/
 ├── src/
 │   ├── main.cpp
 │   ├── config.h
+│   ├── secrets.h.example
 │   ├── sensors.h / sensors.cpp
 │   ├── safety.h / safety.cpp
 │   ├── actuator.h / actuator.cpp
 │   ├── led_status.h / led_status.cpp
 │   ├── display.h / display.cpp
+│   ├── system_status.h / system_status.cpp
 │   ├── mqtt_handler.h / mqtt_handler.cpp
 │   └── button.h / button.cpp
 └── include/
@@ -87,6 +79,60 @@ PlatformIO libraries:
 - PubSubClient  
 - ESP32Servo  
 - FastLED
+
+---
+
+## Configuration
+
+WiFi and MQTT connection details live in `src/secrets.h`, which is
+gitignored so real credentials never end up committed. Only `secrets.h`
+itself is ignored — `src/secrets.h.example` (a template with placeholder
+values) is committed and tracked normally.
+
+**First-time setup:**
+
+```bash
+cp src/secrets.h.example src/secrets.h
+```
+
+Then edit `src/secrets.h`:
+
+```cpp
+constexpr const char* WIFI_SSID = "YOUR_WIFI_SSID";
+constexpr const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+
+constexpr const char* MQTT_HOST = "192.168.1.10";   // your broker's LAN IP
+constexpr int MQTT_PORT = 1883;                     // 1883 = default, unencrypted
+
+constexpr const char* MQTT_USER = "";               // leave "" for anonymous
+constexpr const char* MQTT_PASSWORD_SECRET = "";    // leave "" for anonymous
+```
+
+- **`MQTT_HOST`** is normally the same machine running Home Assistant if
+  you're using the Mosquitto add-on — check Settings → Add-ons → Mosquitto
+  broker, or find your HA host's LAN IP directly.
+- **Anonymous vs. authenticated**: most HA + Mosquitto setups require auth
+  by default. If your broker rejects the connection, create a dedicated
+  MQTT user in HA (Settings → People → Users — don't reuse your own login)
+  and fill in `MQTT_USER`/`MQTT_PASSWORD_SECRET`. The firmware auto-detects
+  which to use: empty strings connect anonymously, non-empty strings send
+  credentials.
+
+Repo already has a working `src/secrets.h` with placeholder values so it
+compiles out of the box — but WiFi/MQTT obviously won't actually connect
+until you put real values in.
+
+**MQTT topics** (not secrets, safe to edit directly in `config.h`):
+
+| Constant | Default | Purpose |
+|---|---|---|
+| `MQTT_TOPIC_STATUS` | `firecontroller/status` | Published every 2s — JSON with sensors, safety state, actuator position |
+| `MQTT_TOPIC_SET_INTAKE` | `firecontroller/set/intake` | Subscribed — send `{"position": 0-100}` to command the damper |
+| `MQTT_TOPIC_PHASE` | `firecontroller/phase` | Subscribed — plain text phase name from the HA automation, drives the status LED color |
+
+If you change these, update the matching `mqtt:` entities in your Home
+Assistant `configuration.yaml` to match, or discovery/state will silently
+stop working with no error on either side.
 
 ---
 
@@ -163,9 +209,92 @@ If the scan finds devices but at unexpected addresses, update the address
 list tried in `initBmp280()` (`sensors.cpp`) or `OLED_ADDR` (`config.h`)
 accordingly.
 
+### Reading MAX31856 fault codes
+
+`Sensors::update()` decodes the raw fault byte into plain text, e.g.:
+
+```text
+MAX31856 fault: 0xFF -> cold-junction-range thermocouple-range cold-junction-high cold-junction-low thermocouple-high thermocouple-low over/under-voltage OPEN-CIRCUIT(not-connected?)
+```
+
+Seeing `OPEN-CIRCUIT` alongside a pile of other bits almost always just
+means **the thermocouple isn't wired up yet** — an open circuit on the TC+/TC-
+inputs also drags the cold-junction and range checks out of bounds, so you
+get one real fault plus several derived ones. This is expected and harmless
+while you're still waiting on parts; once the thermocouple is actually
+connected, faults should stop appearing (or point at something more
+specific, like a single `thermocouple-low`/`thermocouple-high` bit if the
+polarity is reversed).
+
+This particular decoded message only prints when a **previously-working**
+sensor starts faulting during normal reads — not during the background
+retry of a sensor that was never connected in the first place. See below
+for why those two cases are treated differently.
+
+### Why background retries stay quiet
+
+The firmware retries `begin()` every `SENSOR_RETRY_MS` (10s default) while
+a sensor is faulted, so it can recover automatically once you actually plug
+something in — but those retries no longer print anything on failure.
+Logging "still not there" every 10 seconds forever for a sensor you haven't
+received yet is just noise. Only two things are logged:
+
+- **The first attempt**, in `Sensors::init()` at boot — one clear message
+  either way.
+- **An actual state change**, via the Serial status banner
+  (`system_status.cpp`), which reprints automatically the moment a sensor's
+  fault status flips from OK to Missing or back. That's the single source
+  of truth for "did anything change" — no need to watch for repeated
+  per-retry messages.
+
+If you want to see what a specific retry attempt is doing while actively
+debugging wiring, that's what `initMax31856(bool verbose)` /
+`initBmp280(bool verbose)` in `sensors.cpp` are for — temporarily pass
+`true` from the retry call sites in `Sensors::update()` instead of `false`
+if you need that level of detail for a session.
+
+### Why the MAX31856 can report "initialized" with nothing connected at all
+
+Worth understanding if you ever see `MAX31856: initialized` in the log
+before the chip is actually wired up: **SPI has no acknowledgment
+mechanism**, unlike I2C. An I2C `begin()` call fails cleanly if nothing
+ACKs at that address; an SPI `begin()` call succeeds as long as the
+microcontroller can toggle the CS/SCK/MOSI pins, whether or not a real chip
+is on the other end of MISO. `Adafruit_MAX31856::begin()` has no ID/
+signature register check to compensate for this, so it will return `true`
+regardless of whether anything is actually connected.
+
+With MISO left floating (no chip driving it), reads return whatever noise
+that pin happens to pick up — usually enough to look like a fault most of
+the time, but occasionally, by chance, the noise lines up with "no fault"
+and produces a plausible-looking reading like `0.0°C`. That's what a
+sequence like fault → fault → *valid 0.0°C reading* → fault usually means:
+not a real recovery, just noise landing on a value that happens to pass
+the checks for one cycle.
+
+`initMax31856()` does a write-then-readback self-test: it writes the
+thermocouple type register and immediately reads it back three times,
+requiring an exact match every time. A real chip will echo back exactly
+what was written; a floating MISO line is very unlikely to coincidentally
+match three times in a row. This isn't a mathematically airtight guarantee
+of physical presence — nothing purely software-side can be, given SPI's
+lack of ACK — but it turns "always says OK" into "reliably says OK only
+when something is actually answering."
+
+### Why the OLED doesn't have the same problem
+
+Unlike the MAX31856, the SSD1306 OLED is on I2C, which **does** have a real
+ACK mechanism — a device either answers at its address or it doesn't, with
+no ambiguity. `Display::init()` checks this directly
+(`Wire.beginTransmission(OLED_ADDR)` / `Wire.endTransmission()`) before
+even calling the display library's own `begin()`, since some versions of
+`Adafruit_SSD1306::begin()` don't reliably surface an absent display as a
+failure on their own. This check is a hard guarantee, not a heuristic —
+no equivalent of the MAX31856's "probably not connected" uncertainty here.
+
 ---
 
-
+## Actuator
 
 Cable-actuated damper (Jotul i570 fresh-air intake), servo-driven, 40mm
 throw between 0% and 100%. Calibrate `SERVO_MIN_US`/`SERVO_MAX_US` in
@@ -194,6 +323,37 @@ independent of WiFi/MQTT/HA:
 - 🔴 blinking — any safety alarm tier (fault / high-limit / critical)
 - 🟣 pulsing — MQTT lost
 
+## Serial status banner
+
+Printed once at the end of boot, and automatically reprinted whenever WiFi,
+MQTT, or sensor status actually changes (not on a fixed timer) — so it
+naturally captures things like WiFi connecting a few seconds before MQTT
+does, or a sensor dropping out mid-run:
+
+```text
+================================================
+FireController
+Version  : 0.2.0
+CPU      : ESP32-D0WD-V3 @ 240 MHz
+Flash    : 4 MB
+Heap     : 287 kB free
+Scanning I2C...
+  0x3C  SSD1306
+  0x76  BMP280
+OLED      OK
+BMP280    OK
+MAX31856  Missing
+WiFi      Connected to YOUR_SSID (-52 dBm)
+MQTT      Waiting
+================================================
+```
+
+The I2C scan here is independent of `sensors.cpp`'s own scan-on-failure
+logic — this one always runs, not just when something fails, so you get a
+live view of exactly what's on the bus every time the banner reprints.
+MAX31856 status isn't from this scan (it's SPI, not I2C) — it reflects the
+write/readback self-test in `sensors.cpp`.
+
 ## Known gaps
 
 - **No AUTO/MANUAL lock.** Button presses and MQTT position commands both
@@ -214,35 +374,4 @@ independent of WiFi/MQTT/HA:
 
 ## To do
 
-### StartupReport
-
-New files:
-
-- src/startup_report.h
-- src/startup_report.cpp
-
-```txt
-================================================
-
-FireController
-Version : 0.2.0
-
-CPU      : ESP32
-Clock    : 240 MHz
-Flash    : 4 MB
-Heap     : 287 kB
-
-Scanning I2C...
-
-0x3C  SSD1306
-0x76  BMP280
-
-OLED      OK
-BMP280    OK
-MAX31856  Missing
-
-WiFi      Disabled
-MQTT      Waiting
-
-================================================
-```
+- drugi BME280 na zewnątrz (referencja ciśnienia atmosferycznego) — bez tego pomiar „ciągu" z jednego BME280 jest bezużyteczny, bo mierzysz tylko ciśnienie bezwzględne, a interesuje Cię różnica względem otoczenia (typowy ciąg kominowy to 10–30 Pa, więc liczy się różnica, nie wartość absolutna).

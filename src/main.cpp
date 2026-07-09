@@ -7,6 +7,7 @@
 #include "button.h"
 #include "actuator.h"
 #include "led_status.h"
+#include "system_status.h"
 
 // Manual presets cycled by the button. There is currently no AUTO/MANUAL
 // lock: whichever sets the desired position last (button or MQTT) wins.
@@ -26,6 +27,10 @@ void setup() {
     Button::init();
     LedStatus::init();
     MQTTHandler::init();
+
+    // Printed last, after every other module has had a chance to report its
+    // own init result to Serial - this is the summary, not the first word.
+    SystemStatus::init();
 }
 
 void loop() {
@@ -42,4 +47,5 @@ void loop() {
     MQTTHandler::update();
     LedStatus::update();
     Display::update();
+    SystemStatus::update();
 }

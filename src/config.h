@@ -1,5 +1,8 @@
 #pragma once
 
+// ---------------- Firmware ----------------
+constexpr const char* FIRMWARE_VERSION = "0.2.0";
+
 // ---------------- Thermocouple MAX31856 ----------------
 constexpr int PIN_MAX31856_CS = 5;
 
@@ -52,13 +55,13 @@ constexpr float MQTT_LOST_POSITION_COLD_PCT = 100.0f;   // cold/unknown = safe t
 // ---------------- Sensor fault retry ----------------
 constexpr unsigned long SENSOR_RETRY_MS = 10000; // attempt re-init every 10s while faulted
 
-// ---------------- WiFi — set these before deploying ----------------
-constexpr const char* WIFI_SSID = "YOUR_SSID";
-constexpr const char* WIFI_PASSWORD = "YOUR_PASSWORD";
+// ---------------- WiFi / MQTT connection secrets ----------------
+// Actual SSID/password/broker host live in secrets.h, which is gitignored.
+// Copy secrets.h.example -> secrets.h and fill in your real values -
+// see README.md "Configuration" section.
+#include "secrets.h"
 
-// ---------------- MQTT ----------------
-constexpr const char* MQTT_HOST = "192.168.1.10";
-constexpr int MQTT_PORT = 1883;
+// ---------------- MQTT topics (not secret, safe to keep here) ----------------
 constexpr const char* MQTT_CLIENT_ID = "FireController";
 constexpr const char* MQTT_TOPIC_STATUS = "firecontroller/status";
 constexpr const char* MQTT_TOPIC_SET_INTAKE = "firecontroller/set/intake";   // {"position": 0-100}

@@ -6,3 +6,5 @@
 .vscode/ipch
 .cache
 compile_commands.json
+src/secrets.h
+src/secrets_mielnet.h

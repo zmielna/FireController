@@ -8,6 +8,7 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
+#include <string.h>
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
@@ -71,7 +72,13 @@ static void ensureConnected() {
     }
     lastMqttAttempt = now;
 
-    if (mqttClient.connect(MQTT_CLIENT_ID)) {
+    if (strlen(MQTT_USER) > 0) {
+        if (mqttClient.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASSWORD_SECRET)) {
+            mqttClient.subscribe(MQTT_TOPIC_SET_INTAKE);
+            mqttClient.subscribe(MQTT_TOPIC_PHASE);
+            Safety::notifyMqttSeen();
+        }
+    } else if (mqttClient.connect(MQTT_CLIENT_ID)) {
         mqttClient.subscribe(MQTT_TOPIC_SET_INTAKE);
         mqttClient.subscribe(MQTT_TOPIC_PHASE);
         Safety::notifyMqttSeen();
