@@ -1,3 +1,8 @@
+# Important Disclaimer
+
+This device controls the physical airflow to a burning fireplace. The author is not responsible for any damage, fires, or malfunctions resulting from the use of this project. Use at your own risk, after verifying your installation.
+
+
 # FireController
 
 FireController is an ESP32‑based control and monitoring system for a fireplace air‑intake actuator.  
@@ -318,8 +323,8 @@ independent of WiFi/MQTT/HA:
 ## Status LED (WS2812B)
 
 - 🟢 normal operation (or phase not yet known)
-- 🔵 `rozpalanie` (from HA via `MQTT_TOPIC_PHASE`)
-- 🟡 `wygaszanie` (from HA via `MQTT_TOPIC_PHASE`)
+- 🔵 lightning (from HA via `MQTT_TOPIC_PHASE`)
+- 🟡 extinguishing (from HA via `MQTT_TOPIC_PHASE`)
 - 🔴 blinking — any safety alarm tier (fault / high-limit / critical)
 - 🟣 pulsing — MQTT lost
 
@@ -374,4 +379,9 @@ write/readback self-test in `sensors.cpp`.
 
 ## To do
 
-- drugi BME280 na zewnątrz (referencja ciśnienia atmosferycznego) — bez tego pomiar „ciągu" z jednego BME280 jest bezużyteczny, bo mierzysz tylko ciśnienie bezwzględne, a interesuje Cię różnica względem otoczenia (typowy ciąg kominowy to 10–30 Pa, więc liczy się różnica, nie wartość absolutna).
+Adding second BME280 outside (atmospheric pressure reference) - without this, the "draft" measurement from one BME280 is useless, because we only measure the absolute pressure, but we are interested in the difference to the environment (typical chimney draft is 10-30 Pa, so it is the difference that counts, not the absolute value).
+
+
+## License
+
+See file LICENSE for the details of the license that covers use and reproduction of this code Apache License Version 2.0, January 2004
