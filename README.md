@@ -333,6 +333,7 @@ MAX6675 status isn't from this scan (it's SPI, not I2C) - it reflects the
   delay `Sensors::update()`/`Safety::update()` in the same loop iteration.
   The graduated safety checks still run every loop and are not skipped by
   this, but their *cadence* can jitter under network stress.
+- **No logic for button yet**
 - **No tests** - no unit tests or hardware-in-loop checks.
 
 ---
