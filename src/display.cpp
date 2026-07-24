@@ -97,6 +97,29 @@ static void drawStatusScreen() {
     oled.printf("Heap: %u kB", (unsigned)(ESP.getFreeHeap() / 1024));
 }
 
+// Same chip/board info as the Serial status banner's header
+// (system_status.cpp) - CPU model, clock, flash size, firmware version.
+// Doesn't duplicate MAC/WiFi details, those already live on the status page.
+static void drawChipScreen() {
+    oled.setCursor(0, 0);
+    oled.println("Board info");
+
+    oled.setCursor(0, 12);
+    oled.printf("FW: %s", FIRMWARE_VERSION);
+
+    oled.setCursor(0, 22);
+    oled.printf("CPU: %s", ESP.getChipModel());
+
+    oled.setCursor(0, 32);
+    oled.printf("Clock: %u MHz", (unsigned)ESP.getCpuFreqMHz());
+
+    oled.setCursor(0, 44);
+    oled.printf("Flash: %u MB", (unsigned)(ESP.getFlashChipSize() / (1024 * 1024)));
+
+    oled.setCursor(0, 54);
+    oled.printf("Cores: %d", ESP.getChipCores());
+}
+
 void Display::update() {
     if (!oledOk) {
         return;
@@ -105,7 +128,7 @@ void Display::update() {
 
     if (now - lastPageSwitchMs >= DISPLAY_PAGE_ROTATE_MS) {
         lastPageSwitchMs = now;
-        currentPage = (currentPage + 1) % 2;
+        currentPage = (currentPage + 1) % 3;
     }
 
     if (now - lastRefreshMs < DISPLAY_REFRESH_MS) {
@@ -114,10 +137,10 @@ void Display::update() {
     lastRefreshMs = now;
 
     oled.clearDisplay();
-    if (currentPage == 0) {
-        drawLiveScreen();
-    } else {
-        drawStatusScreen();
+    switch (currentPage) {
+        case 0: drawLiveScreen(); break;
+        case 1: drawStatusScreen(); break;
+        case 2: drawChipScreen(); break;
     }
     oled.display();
 }

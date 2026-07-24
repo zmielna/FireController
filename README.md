@@ -42,11 +42,13 @@ It integrates thermocouple temperature sensing, pressure measurement, safety log
 - **Status LED (WS2812B)**  
   - Combustion phase and alarm state at a glance
 
-- **OLED UI** (2 pages, rotating every 10s)  
+- **OLED UI** (3 pages, rotating every 10s)  
   - Page 1: exhaust temperature + trend, pressure, actuator position,
     safety state, MQTT + button status  
   - Page 2: BMP280/MAX6675/WiFi/MQTT status + free heap — condensed version
-    of the Serial status banner, for diagnosing without a laptop plugged in
+    of the Serial status banner, for diagnosing without a laptop plugged in  
+  - Page 3: board/chip info — firmware version, CPU model, clock, flash
+    size, core count
 
 - **MQTT telemetry**  
   - JSON status payload  
@@ -174,7 +176,7 @@ of truth; if you rewire something, change it there, not just here.
 |---|---|---|
 | MAX6675 CS (SELECT) | GPIO5 | `PIN_MAX6675_CS` |
 | MAX6675 SCK (CLOCK) | GPIO18 | hardware VSPI default, not set explicitly in code |
-| MAX6675 MISO (SO) | GPIO19 | hardware VSPI default — **needs an external pull-up, see below** |
+| MAX6675 MISO (SO) | GPIO19 | hardware VSPI default — **needs an external 3.3V pull-up, see below** |
 | MAX6675 MOSI | *(unused)* | MAX6675 only outputs data, MOSI isn't needed — SPI.begin() still reserves GPIO23 for it by ESP32 VSPI default, just leave it unconnected |
 | BMP280 SDA | GPIO21 | `I2C_SDA`, shared bus with OLED |
 | BMP280 SCL | GPIO22 | `I2C_SCL`, shared bus with OLED |
@@ -222,19 +224,26 @@ needs a specific arrangement to be reliable, not just electrically connected:
   specific board's datasheet. Many cheap BMP280 breakouts have an onboard
   regulator and are fine on 5V, but the bare chip is not, and not every
   board actually has that regulator despite looking similar.
-- **MAX6675 modules are typically fine on 5V** (check your specific
-  breakout — most integrate a 3.3V regulator for the chip itself and
-  expose a 5V-tolerant VCC pin). If yours is a bare/minimal breakout
-  without that regulator, use 3.3V instead — check the silkscreen or
-  seller listing.
-- **MAX6675's MISO needs an external pull-up resistor (4.7kΩ–1kΩ, closer
-  to 1kΩ for longer wire runs) between MISO and 5V.** This isn't optional
-  polish — without it, an unconnected or momentarily-disconnected MAX6675
-  can produce noise on MISO that looks like plausible (but wrong)
-  temperature data instead of cleanly reading as "not connected." With the
-  pull-up in place, an absent/disconnected chip reliably reads back
-  `0xFFFF`, which the firmware recognizes as `STATUS_NO_COMMUNICATION` —
-  see the section below.
+- **MAX6675: power it from 3.3V, not 5V — this matters for pin safety, not
+  just signal cleanliness.** ESP32 GPIOs are **not 5V-tolerant** (max safe
+  input is ~3.6V). The MAX6675 chip itself is rated for 3.0-5.5V supply
+  (per the Maxim datasheet), and its `SO`/MISO output swings roughly
+  between 0V and VCC. Power the module from ESP32's 3.3V pin instead of
+  5V, and MISO's high level stays safely within the ESP32's input range
+  with no extra components needed. This applies to the bare/minimal
+  breakout modules typical for MAX6675 (VCC routed straight to the chip,
+  no onboard regulator) — if your specific board turns out to have its own
+  5V-only regulator on it (check the silkscreen for a 3-pin regulator IC;
+  uncommon for MAX6675 breakouts but worth a 10-second look), you'd need a
+  level shifter on MISO instead of powering at 3.3V directly.
+- **MISO needs an external pull-up resistor (4.7kΩ–1kΩ, closer to 1kΩ for
+  longer wire runs) between MISO and 3.3V** (not 5V — see above). This
+  isn't optional polish — without it, an unconnected or
+  momentarily-disconnected MAX6675 can produce noise on MISO that looks
+  like plausible (but wrong) temperature data instead of cleanly reading
+  as "not connected." With the pull-up in place, an absent/disconnected
+  chip reliably reads back `0xFFFF`, which the firmware recognizes as
+  `STATUS_NO_COMMUNICATION` — see the section below.
 - **Servo needs its own 5V/6V supply, not the ESP32's 3.3V rail or its USB
   5V pin.** A servo's stall/startup current (500mA-1A+ depending on size)
   will brown out the ESP32 if you power it from the same regulator. Common
