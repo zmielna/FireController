@@ -91,7 +91,7 @@ static void drawLiveScreen() {
     bool safetyOk = (Safety::getState() == SafetyState::NORMAL);
 
     oled.setCursor(0, 0);
-    oled.printf("FireCtrl      %c%c%c",
+    oled.printf("FireCtrl v1.4  %c%c%c",
         wifiOk   ? 'W' : '-',
         mqttOk   ? 'M' : '-',
         safetyOk ? 'S' : '-');

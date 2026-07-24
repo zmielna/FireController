@@ -1,6 +1,7 @@
 #include "safety.h"
 #include "config.h"
 #include "sensors.h"
+#include "mqtt_handler.h" // <--- DODANY NAGŁÓWEK
 #include <Arduino.h>
 #include <math.h>
 
@@ -20,6 +21,11 @@ void Safety::notifyMqttSeen() {
 }
 
 void Safety::update() {
+    // Jeśli MQTT jest aktywne i połączone, odświeżamy timer aktywności
+    if (MQTTHandler::isConnected()) {
+        lastMqttSeenMs = millis();
+    }
+
     float exhaust = Sensors::getExhaustTemp();
 
     bool sensorFault = Sensors::isMaxFault() || Sensors::isBmpFault() ||
@@ -27,10 +33,6 @@ void Safety::update() {
                         exhaust < TEMP_SENSOR_MIN_C || exhaust > TEMP_SENSOR_MAX_C;
 
     // Priority 1: sensor fault -> FAIL OPEN.
-    // An unknown reading is not the same as a known-overheat reading. Forcing
-    // the intake closed on a flaky wire or a disconnected thermocouple starves
-    // a fire that might be burning perfectly fine - open is the safe default
-    // when you genuinely don't know what's happening.
     if (sensorFault) {
         state = SafetyState::SENSOR_FAULT;
         enforcedPosition = STARTUP_POSITION_PCT;
@@ -39,8 +41,6 @@ void Safety::update() {
     }
 
     // Priority 2: critical overheat -> hard close toward the safe minimum.
-    // Never fully closed (MIN_SAFE_POSITION_PCT, not 0) - some airflow keeps
-    // combustion from going incomplete/smoky even while throttling hard.
     if (exhaust >= TEMP_CRITICAL_C) {
         state = SafetyState::CRITICAL_TEMP;
         enforcedPosition = MIN_SAFE_POSITION_PCT;
@@ -48,8 +48,7 @@ void Safety::update() {
         return;
     }
 
-    // Priority 3: high temp -> soft ceiling, not a hard override. If HA/manual
-    // control wants something lower than the ceiling, that's still honored.
+    // Priority 3: high temp -> soft ceiling, not a hard override.
     if (exhaust >= TEMP_HIGH_LIMIT_C) {
         state = SafetyState::HIGH_TEMP_LIMIT;
         enforcedPosition = -1.0f;
@@ -58,8 +57,6 @@ void Safety::update() {
     }
 
     // Priority 4: MQTT/HA lost beyond timeout -> local fallback.
-    // If the fire is actively burning, don't slam the intake open (could
-    // flare it up right when nobody's watching); moderate opening instead.
     if (millis() - lastMqttSeenMs > MQTT_LOST_TIMEOUT_MS) {
         state = SafetyState::MQTT_LOST;
         enforcedPosition = (exhaust > MQTT_LOST_HOT_THRESHOLD_C)
