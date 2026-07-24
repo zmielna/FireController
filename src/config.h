@@ -3,14 +3,17 @@
 // ---------------- Firmware ----------------
 constexpr const char* FIRMWARE_VERSION = "0.2.0";
 
-// ---------------- Thermocouple MAX31856 ----------------
-constexpr int PIN_MAX31856_CS = 5;
+// ---------------- Thermocouple MAX6675 (K-type, SPI) ----------------
+// Same physical wiring as before (CS pin unchanged) - only the chip and
+// library changed, not the pinout. SCK/MISO/MOSI are the ESP32 hardware
+// VSPI defaults (18/19/23), passed to SPI.begin() with no arguments.
+constexpr int PIN_MAX6675_CS = 5;
 
 // ---------------- BMP280 (I2C) ----------------
 constexpr int I2C_SDA = 21;
 constexpr int I2C_SCL = 22;
 
-// ---------------- OLED SSD1306 ----------------
+// ---------------- OLED SH1106 ----------------
 constexpr int OLED_ADDR = 0x3C;
 
 // ---------------- Button ----------------
@@ -70,6 +73,7 @@ constexpr const char* MQTT_TOPIC_PHASE = "firecontroller/phase";            // p
 // ---------------- Timing (ms) ----------------
 constexpr unsigned long BUTTON_DEBOUNCE_MS = 50;
 constexpr unsigned long DISPLAY_REFRESH_MS = 250;
+constexpr unsigned long DISPLAY_PAGE_ROTATE_MS = 10000;
 constexpr unsigned long MQTT_PUBLISH_MS = 2000;
 constexpr unsigned long WIFI_RETRY_MS = 5000;
 constexpr unsigned long MQTT_RETRY_MS = 5000;

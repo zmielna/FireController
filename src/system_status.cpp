@@ -16,7 +16,7 @@ static bool lastOledOk = false;
 static const char* i2cDeviceName(uint8_t addr) {
     switch (addr) {
         case 0x3C:
-        case 0x3D: return "SSD1306";
+        case 0x3D: return "SH1106/SSD1306";
         case 0x76:
         case 0x77: return "BMP280";
         case 0x38: return "AHT10/AHT20";
@@ -47,9 +47,9 @@ static void printBanner() {
 
     Serial.printf("OLED      %s\n", Display::isOk() ? "OK" : "Missing");
     Serial.printf("BMP280    %s\n", Sensors::isBmpFault() ? "Missing" : "OK");
-    // MAX31856 is SPI, not on the I2C scan above - status comes from the
-    // write/readback self-test in sensors.cpp, not from the bus scan.
-    Serial.printf("MAX31856  %s\n", Sensors::isMaxFault() ? "Missing" : "OK");
+    // MAX6675 is SPI, not on the I2C scan above - status comes from the
+    // read() status code in sensors.cpp, not a bus scan.
+    Serial.printf("MAX6675   %s\n", Sensors::isMaxFault() ? "Missing" : "OK");
 
     if (WiFi.status() == WL_CONNECTED) {
         Serial.printf("WiFi      Connected to %s (%d dBm)\n", WiFi.SSID().c_str(), WiFi.RSSI());

@@ -1,8 +1,3 @@
-# Important Disclaimer
-
-This device controls the physical airflow to a burning fireplace. The author is not responsible for any damage, fires, or malfunctions resulting from the use of this project. Use at your own risk, after verifying your installation.
-
-
 # FireController
 
 FireController is an ESP32‑based control and monitoring system for a fireplace air‑intake actuator.  
@@ -10,10 +5,30 @@ It integrates thermocouple temperature sensing, pressure measurement, safety log
 
 ---
 
+> **⚠️ Safety disclaimer**
+>
+> This project controls the physical air intake of a burning fireplace. It is a
+> hobbyist DIY system, not a certified safety device, and has not been
+> evaluated by any safety authority. The software includes multiple layers
+> of fail-safe logic (see [Safety model](#safety-model) below), but software
+> alone should never be your only line of defense around an open flame —
+> an independent mechanical/thermal cutoff and a working smoke/CO detector
+> in the room are not optional extras, they're required.
+>
+> **Use this project entirely at your own risk.** The author(s) accept no
+> liability for damage, injury, fire, or loss of any kind arising from
+> building, installing, or operating this system or any variation of it.
+> If you build this, you are responsible for verifying your own
+> installation, wiring, and fail-safe behavior before relying on it
+> unattended. See [LICENSE](LICENSE) for the full legal disclaimer of
+> warranty and liability.
+
+---
+
 ## Features
 
 - **Sensor drivers**  
-  - MAX31856 (K‑type thermocouple)  
+  - MAX6675 (K‑type thermocouple)  
   - BMP280 (pressure + temperature)
 
 - **Actuator**  
@@ -27,12 +42,11 @@ It integrates thermocouple temperature sensing, pressure measurement, safety log
 - **Status LED (WS2812B)**  
   - Combustion phase and alarm state at a glance
 
-- **OLED UI**  
-  - Exhaust temperature + trend  
-  - Pressure  
-  - Actuator position  
-  - Safety state  
-  - MQTT + button status
+- **OLED UI** (2 pages, rotating every 10s)  
+  - Page 1: exhaust temperature + trend, pressure, actuator position,
+    safety state, MQTT + button status  
+  - Page 2: BMP280/MAX6675/WiFi/MQTT status + free heap — condensed version
+    of the Serial status banner, for diagnosing without a laptop plugged in
 
 - **MQTT telemetry**  
   - JSON status payload  
@@ -78,8 +92,8 @@ PlatformIO libraries:
 
 - ArduinoJson  
 - Adafruit GFX  
-- Adafruit SSD1306  
-- Adafruit MAX31856  
+- Adafruit SH110X  
+- MAX6675 (RobTillaart)  
 - Adafruit BMP280  
 - PubSubClient  
 - ESP32Servo  
@@ -158,35 +172,76 @@ of truth; if you rewire something, change it there, not just here.
 
 | Function | ESP32 pin | Notes |
 |---|---|---|
-| MAX31856 CS | GPIO5 | `PIN_MAX31856_CS` |
-| MAX31856 SCK | GPIO18 | hardware VSPI default, not set explicitly in code |
-| MAX31856 MISO | GPIO19 | hardware VSPI default |
-| MAX31856 MOSI | GPIO23 | hardware VSPI default |
+| MAX6675 CS (SELECT) | GPIO5 | `PIN_MAX6675_CS` |
+| MAX6675 SCK (CLOCK) | GPIO18 | hardware VSPI default, not set explicitly in code |
+| MAX6675 MISO (SO) | GPIO19 | hardware VSPI default — **needs an external pull-up, see below** |
+| MAX6675 MOSI | *(unused)* | MAX6675 only outputs data, MOSI isn't needed — SPI.begin() still reserves GPIO23 for it by ESP32 VSPI default, just leave it unconnected |
 | BMP280 SDA | GPIO21 | `I2C_SDA`, shared bus with OLED |
 | BMP280 SCL | GPIO22 | `I2C_SCL`, shared bus with OLED |
 | OLED SDA | GPIO21 | same I2C bus as BMP280 |
 | OLED SCL | GPIO22 | same I2C bus as BMP280 |
 | Button | GPIO33 | `BUTTON_PIN`, internal pull-up enabled in firmware |
 | Servo (damper) | GPIO13 | `SERVO_PIN`, PWM |
-| WS2812B LED data | GPIO25 | `LED_PIN` |
+| WS2812B LED data | GPIO25 | `LED_PIN`, **needs a series resistor, see diagram below** |
+
+### WS2812B wiring diagram
+
+This is the one piece that isn't just "connect pin X to pin Y" — WS2812B
+needs a specific arrangement to be reliable, not just electrically connected:
+
+```text
+ ESP32                              WS2812B
+┌──────────┐                       ┌─────────┐
+│      5V  ├───────────────────────┤ VCC     │
+│          │                       │         │
+│     GND  ├───────────┬───────────┤ GND     │
+│          │            (shared    │         │
+│  GPIO25  ├──[330-470Ω]───────────┤ DIN     │
+└──────────┘   resistor            └─────────┘
+```
+
+- **VCC from 5V, not 3.3V.** WS2812B is a 5V part; running it from 3.3V
+  under-drives it and colors will look dim/wrong.
+- **GND is shared** between the ESP32 and the LED — this is required
+  regardless of what powers the LED's VCC line.
+- **The series resistor (330-470Ω) goes on the data line (GPIO25 → DIN),
+  not on power.** It protects the LED's input from voltage spikes at
+  power-up and helps clean up the signal edge — cheap insurance, not
+  optional-feeling once you've had one glitch out.
+- **Data direction matters**: WS2812B has an arrow on the PCB (or DIN/DOUT
+  silkscreen labels) showing signal flow. GPIO25 connects to **DIN**, the
+  input side — connecting to DOUT instead simply won't work.
+- For a single LED (this project's case), you generally don't need the
+  large buffer capacitor across VCC/GND that WS2812B *strips* require —
+  that becomes relevant if you ever chain more LEDs off this one.
 
 ### Power domains — read this before wiring anything
 
-- **BMP280 and MAX31856 are 3.3V parts.** Feed them from the ESP32's 3.3V
-  pin, not 5V, even if the breakout board silkscreen says "5V tolerant" —
-  check your specific board's datasheet. Many cheap BMP280 breakouts have an
-  onboard regulator and are fine on 5V, but the bare BMP280 chip is not, and
-  not every board actually has that regulator despite looking similar.
+- **BMP280 is a 3.3V part.** Feed it from the ESP32's 3.3V pin, not 5V,
+  even if the breakout board silkscreen says "5V tolerant" — check your
+  specific board's datasheet. Many cheap BMP280 breakouts have an onboard
+  regulator and are fine on 5V, but the bare chip is not, and not every
+  board actually has that regulator despite looking similar.
+- **MAX6675 modules are typically fine on 5V** (check your specific
+  breakout — most integrate a 3.3V regulator for the chip itself and
+  expose a 5V-tolerant VCC pin). If yours is a bare/minimal breakout
+  without that regulator, use 3.3V instead — check the silkscreen or
+  seller listing.
+- **MAX6675's MISO needs an external pull-up resistor (4.7kΩ–1kΩ, closer
+  to 1kΩ for longer wire runs) between MISO and 5V.** This isn't optional
+  polish — without it, an unconnected or momentarily-disconnected MAX6675
+  can produce noise on MISO that looks like plausible (but wrong)
+  temperature data instead of cleanly reading as "not connected." With the
+  pull-up in place, an absent/disconnected chip reliably reads back
+  `0xFFFF`, which the firmware recognizes as `STATUS_NO_COMMUNICATION` —
+  see the section below.
 - **Servo needs its own 5V/6V supply, not the ESP32's 3.3V rail or its USB
   5V pin.** A servo's stall/startup current (500mA-1A+ depending on size)
   will brown out the ESP32 if you power it from the same regulator. Common
   ground between the servo supply and the ESP32 is required; the two don't
   need a common positive rail.
-- **WS2812B wants 5V on DIN.** The ESP32's 3.3V logic level is marginal for
-  WS2812B's data-high threshold, especially over longer wires. If the LED
-  shows wrong/flickering colors, add a 330-470Ω resistor in series on the
-  data line, and/or a logic level shifter. Powering the LED itself from 5V
-  is fine — only the data line's logic level is the concern.
+- **WS2812B wants 5V on VCC and DIN logic level is marginal at 3.3V**,
+  especially over longer wires — see the wiring diagram above.
 - **I2C pull-ups**: most BMP280/OLED breakout boards already have onboard
   pull-up resistors on SDA/SCL. If you're wiring bare chips or your scan
   finds nothing despite correct wiring, add external 4.7kΩ pull-ups to
@@ -194,9 +249,9 @@ of truth; if you rewire something, change it there, not just here.
 
 ### Debugging "sensor init FAILED" on boot
 
-`Sensors::init()` now runs a full I2C bus scan and logs every address it
-finds if BMP280 init fails — check `pio device monitor` output. A few
-things that commonly cause this:
+`Sensors::init()` runs a full I2C bus scan and logs every address it finds
+if BMP280 init fails — check `pio device monitor` output. A few things
+that commonly cause this:
 
 - **Wrong I2C address.** The firmware already tries both `0x76` and `0x77`
   for the BMP280 (some breakout boards default to one, some the other,
@@ -214,88 +269,54 @@ If the scan finds devices but at unexpected addresses, update the address
 list tried in `initBmp280()` (`sensors.cpp`) or `OLED_ADDR` (`config.h`)
 accordingly.
 
-### Reading MAX31856 fault codes
+### Reading MAX6675 status codes
 
-`Sensors::update()` decodes the raw fault byte into plain text, e.g.:
+`Sensors::update()` calls `read()` every cycle and reacts to its status:
 
-```text
-MAX31856 fault: 0xFF -> cold-junction-range thermocouple-range cold-junction-high cold-junction-low thermocouple-high thermocouple-low over/under-voltage OPEN-CIRCUIT(not-connected?)
-```
+| Status | Meaning | Typical cause |
+|---|---|---|
+| `STATUS_OK` | Reading is valid | — |
+| `STATUS_ERROR` | Thermocouple shorted to VCC | Wiring fault — check polarity/insulation |
+| `STATUS_NO_COMMUNICATION` | Chip not responding | Not connected, or missing the MISO pull-up (see Power domains above) |
+| `STATUS_NOREAD` | No read performed yet | Only seen before the very first read |
 
-Seeing `OPEN-CIRCUIT` alongside a pile of other bits almost always just
-means **the thermocouple isn't wired up yet** — an open circuit on the TC+/TC-
-inputs also drags the cold-junction and range checks out of bounds, so you
-get one real fault plus several derived ones. This is expected and harmless
-while you're still waiting on parts; once the thermocouple is actually
-connected, faults should stop appearing (or point at something more
-specific, like a single `thermocouple-low`/`thermocouple-high` bit if the
-polarity is reversed).
+Unlike the earlier MAX31856-based design, this doesn't need a background
+retry timer or a self-test heuristic — a MAX6675 read is a fast SPI
+transaction (tens of microseconds), cheap enough to just perform every
+`Sensors::update()` call, and `STATUS_NO_COMMUNICATION` is a real,
+library-provided answer rather than something inferred indirectly. Logging
+is still edge-triggered though: a message only prints on the transition
+into or out of a fault, not every cycle while steady-state faulted — the
+Serial status banner (`system_status.cpp`) remains the place to check for
+current state, exactly as with the BMP280.
 
-This particular decoded message only prints when a **previously-working**
-sensor starts faulting during normal reads — not during the background
-retry of a sensor that was never connected in the first place. See below
-for why those two cases are treated differently.
+### Why the OLED doesn't have the same "always says OK" problem
 
-### Why background retries stay quiet
+Some I2C display libraries (this one included, historically) don't
+reliably fail their `begin()` call when nothing is on the bus — the same
+class of issue the old MAX31856 code had over SPI, just for a different
+chip. Unlike SPI though, I2C has a real ACK mechanism: a device either
+answers at its address or it doesn't, no ambiguity. `Display::init()`
+checks this directly (`Wire.beginTransmission(OLED_ADDR)` /
+`Wire.endTransmission()`) before ever calling the display library's own
+`begin()`. This is a hard guarantee, not a heuristic.
 
-The firmware retries `begin()` every `SENSOR_RETRY_MS` (10s default) while
-a sensor is faulted, so it can recover automatically once you actually plug
-something in — but those retries no longer print anything on failure.
-Logging "still not there" every 10 seconds forever for a sensor you haven't
-received yet is just noise. Only two things are logged:
+### SH1106 vs SSD1306 — cosmetically identical modules, different chip
 
-- **The first attempt**, in `Sensors::init()` at boot — one clear message
-  either way.
-- **An actual state change**, via the Serial status banner
-  (`system_status.cpp`), which reprints automatically the moment a sensor's
-  fault status flips from OK to Missing or back. That's the single source
-  of truth for "did anything change" — no need to watch for repeated
-  per-retry messages.
+The actual panel used in this project is an **SH1106** (128x64, I2C),
+driven by `Adafruit_SH110X` — not the more commonly-referenced SSD1306.
+These modules are visually and electrically identical (same size, same
+pinout, same default I2C address), so it's an easy substitution to make
+by accident when ordering, and the two controllers are **not** command-compatible.
 
-If you want to see what a specific retry attempt is doing while actively
-debugging wiring, that's what `initMax31856(bool verbose)` /
-`initBmp280(bool verbose)` in `sensors.cpp` are for — temporarily pass
-`true` from the retry call sites in `Sensors::update()` instead of `false`
-if you need that level of detail for a session.
-
-### Why the MAX31856 can report "initialized" with nothing connected at all
-
-Worth understanding if you ever see `MAX31856: initialized` in the log
-before the chip is actually wired up: **SPI has no acknowledgment
-mechanism**, unlike I2C. An I2C `begin()` call fails cleanly if nothing
-ACKs at that address; an SPI `begin()` call succeeds as long as the
-microcontroller can toggle the CS/SCK/MOSI pins, whether or not a real chip
-is on the other end of MISO. `Adafruit_MAX31856::begin()` has no ID/
-signature register check to compensate for this, so it will return `true`
-regardless of whether anything is actually connected.
-
-With MISO left floating (no chip driving it), reads return whatever noise
-that pin happens to pick up — usually enough to look like a fault most of
-the time, but occasionally, by chance, the noise lines up with "no fault"
-and produces a plausible-looking reading like `0.0°C`. That's what a
-sequence like fault → fault → *valid 0.0°C reading* → fault usually means:
-not a real recovery, just noise landing on a value that happens to pass
-the checks for one cycle.
-
-`initMax31856()` does a write-then-readback self-test: it writes the
-thermocouple type register and immediately reads it back three times,
-requiring an exact match every time. A real chip will echo back exactly
-what was written; a floating MISO line is very unlikely to coincidentally
-match three times in a row. This isn't a mathematically airtight guarantee
-of physical presence — nothing purely software-side can be, given SPI's
-lack of ACK — but it turns "always says OK" into "reliably says OK only
-when something is actually answering."
-
-### Why the OLED doesn't have the same problem
-
-Unlike the MAX31856, the SSD1306 OLED is on I2C, which **does** have a real
-ACK mechanism — a device either answers at its address or it doesn't, with
-no ambiguity. `Display::init()` checks this directly
-(`Wire.beginTransmission(OLED_ADDR)` / `Wire.endTransmission()`) before
-even calling the display library's own `begin()`, since some versions of
-`Adafruit_SSD1306::begin()` don't reliably surface an absent display as a
-failure on their own. This check is a hard guarantee, not a heuristic —
-no equivalent of the MAX31856's "probably not connected" uncertainty here.
+If you ever see a screen full of static/noise with a fragment of legible
+text that looks mirrored or shifted, that's the signature of this exact
+mismatch — the wrong driver library successfully talking to the chip (so
+something renders) but mapping columns/segments incorrectly (so it comes
+out scrambled). If that happens again after any hardware swap, check the
+library in `platformio.ini` (`Adafruit_SH110X` vs `Adafruit_SSD1306`)
+against the chip actually printed/implied on the board before assuming a
+wiring fault.
 
 ---
 
@@ -323,8 +344,8 @@ independent of WiFi/MQTT/HA:
 ## Status LED (WS2812B)
 
 - 🟢 normal operation (or phase not yet known)
-- 🔵 lightning (from HA via `MQTT_TOPIC_PHASE`)
-- 🟡 extinguishing (from HA via `MQTT_TOPIC_PHASE`)
+- 🔵 `rozpalanie` (from HA via `MQTT_TOPIC_PHASE`)
+- 🟡 `wygaszanie` (from HA via `MQTT_TOPIC_PHASE`)
 - 🔴 blinking — any safety alarm tier (fault / high-limit / critical)
 - 🟣 pulsing — MQTT lost
 
@@ -343,11 +364,11 @@ CPU      : ESP32-D0WD-V3 @ 240 MHz
 Flash    : 4 MB
 Heap     : 287 kB free
 Scanning I2C...
-  0x3C  SSD1306
+  0x3C  SH1106/SSD1306
   0x76  BMP280
 OLED      OK
 BMP280    OK
-MAX31856  Missing
+MAX6675   Missing
 WiFi      Connected to YOUR_SSID (-52 dBm)
 MQTT      Waiting
 ================================================
@@ -356,8 +377,8 @@ MQTT      Waiting
 The I2C scan here is independent of `sensors.cpp`'s own scan-on-failure
 logic — this one always runs, not just when something fails, so you get a
 live view of exactly what's on the bus every time the banner reprints.
-MAX31856 status isn't from this scan (it's SPI, not I2C) — it reflects the
-write/readback self-test in `sensors.cpp`.
+MAX6675 status isn't from this scan (it's SPI, not I2C) — it reflects the
+`read()` status code from `sensors.cpp`.
 
 ## Known gaps
 
@@ -377,11 +398,40 @@ write/readback self-test in `sensors.cpp`.
   this, but their *cadence* can jitter under network stress.
 - **No tests** — no unit tests or hardware-in-loop checks.
 
-## To do
-
-Adding second BME280 outside (atmospheric pressure reference) - without this, the "draft" measurement from one BME280 is useless, because we only measure the absolute pressure, but we are interested in the difference to the environment (typical chimney draft is 10-30 Pa, so it is the difference that counts, not the absolute value).
-
+---
 
 ## License
 
-See file LICENSE for the details of the license that covers use and reproduction of this code Apache License Version 2.0, January 2004
+Licensed under the [Apache License, Version 2.0](LICENSE). You're free to
+use, modify, and distribute this project, including commercially, as long
+as you retain the copyright/license notice and note what you changed in
+any redistributed copies. See the [Safety disclaimer](#firecontroller) at
+the top of this README and the Disclaimer of Warranty / Limitation of
+Liability sections in [LICENSE](LICENSE) — both apply in full.
+
+## Third-party licenses
+
+This project depends on the following libraries via PlatformIO. None of
+them require this project itself to use any particular license, but their
+own terms still apply to their respective source code:
+
+| Library | License |
+|---|---|
+| ArduinoJson | MIT |
+| Adafruit GFX Library | BSD |
+| Adafruit SH110X | BSD |
+| MAX6675 (RobTillaart) | MIT |
+| Adafruit BMP280 Library | BSD |
+| PubSubClient | MIT |
+| FastLED | MIT |
+| ESP32Servo | **LGPL-2.1** |
+
+`ESP32Servo` is the one worth knowing about specifically: LGPL normally
+requires that a user be able to relink your application against a modified
+version of the library, which is awkward to guarantee on a statically-linked
+embedded target. Since this entire project is open source and buildable
+from source via PlatformIO, that requirement is satisfied trivially —
+anyone can already swap the library version and rebuild. This stops being
+automatic if you ever fork this into a closed-source product; at that
+point, LGPL compliance would need to be revisited properly (e.g. by
+isolating the servo control behind a swappable module).

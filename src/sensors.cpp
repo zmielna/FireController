@@ -2,13 +2,14 @@
 #include "config.h"
 #include <Arduino.h>
 #include <Wire.h>
-#include <Adafruit_MAX31856.h>
+#include <SPI.h>
+#include <MAX6675.h>
 #include <Adafruit_BMP280.h>
 #include <math.h>
 #include <string.h>
 
-// ---------------- MAX31856 ----------------
-Adafruit_MAX31856 max31856(PIN_MAX31856_CS);
+// ---------------- MAX6675 (K-type thermocouple, hardware SPI) ----------------
+MAX6675 thermocouple(PIN_MAX6675_CS, &SPI);
 
 // ---------------- BMP280 ------------------
 Adafruit_BMP280 bmp;
@@ -20,11 +21,10 @@ static float exhaustTrend = 0.0f;
 static float inletPressure = NAN;
 static float inletTemp = NAN;
 
-// Faulted until the first successful init - safer default than "assume OK".
+// Faulted until the first successful read - safer default than "assume OK".
 static bool maxFault = true;
 static bool bmpFault = true;
 
-static unsigned long lastMaxRetryMs = 0;
 static unsigned long lastBmpRetryMs = 0;
 
 // Median filter (5-sample window) - a single EMI spike or noisy reading
@@ -56,22 +56,28 @@ static float medianOf5(const float* arr) {
     return sorted[2];
 }
 
-// Translates the MAX31856 fault byte into readable text. Bit meanings are
-// from the Adafruit_MAX31856 header (MAX31856_FAULT_* constants) and the
-// datasheet. Multiple bits are commonly set together - e.g. a disconnected
-// thermocouple typically shows OPEN plus both TC range bits, since the ADC
-// sees a floating/out-of-range input on top of the literal open circuit.
-static void logMax31856Fault(uint8_t fault) {
-    Serial.printf("MAX31856 fault: 0x%02X ->", fault);
-    if (fault & MAX31856_FAULT_CJRANGE) Serial.print(" cold-junction-range");
-    if (fault & MAX31856_FAULT_TCRANGE) Serial.print(" thermocouple-range");
-    if (fault & MAX31856_FAULT_CJHIGH)  Serial.print(" cold-junction-high");
-    if (fault & MAX31856_FAULT_CJLOW)   Serial.print(" cold-junction-low");
-    if (fault & MAX31856_FAULT_TCHIGH)  Serial.print(" thermocouple-high");
-    if (fault & MAX31856_FAULT_TCLOW)   Serial.print(" thermocouple-low");
-    if (fault & MAX31856_FAULT_OVUV)    Serial.print(" over/under-voltage");
-    if (fault & MAX31856_FAULT_OPEN)    Serial.print(" OPEN-CIRCUIT(not-connected?)");
-    Serial.println();
+// MAX6675 (via RobTillaart's library) exposes 4 status codes from read():
+// STATUS_OK(0), STATUS_ERROR(4, thermocouple shorted to VCC),
+// STATUS_NOREAD(128, nothing read yet), STATUS_NO_COMMUNICATION(129, chip
+// not responding - typically "not connected"). This is genuinely better
+// fault granularity than the datasheet alone suggests - the library
+// distinguishes a wiring short from a missing chip, which the earlier
+// MAX31856 self-test approach couldn't do at all for MAX6675-class parts.
+static void logMax6675Status(uint8_t status) {
+    switch (status) {
+        case STATUS_ERROR:
+            Serial.println("MAX6675: thermocouple SHORT TO VCC - check wiring/polarity");
+            break;
+        case STATUS_NO_COMMUNICATION:
+            Serial.println("MAX6675: no communication - chip not responding "
+                            "(not connected, or missing the MISO pull-up resistor - see README)");
+            break;
+        case STATUS_NOREAD:
+            Serial.println("MAX6675: no read performed yet");
+            break;
+        default:
+            Serial.printf("MAX6675: unknown status 0x%02X\n", status);
+    }
 }
 
 // Scans the I2C bus and logs every address that ACKs. Called once, on
@@ -89,52 +95,6 @@ static void scanI2CBus() {
     if (found == 0) {
         Serial.println("    no I2C devices found at all - check SDA/SCL wiring and power");
     }
-}
-
-// verbose=true prints the full diagnostic explanation (used once, from
-// Sensors::init()). verbose=false stays silent on failure (used by the
-// periodic background retry in Sensors::update()) - the retry still runs
-// every SENSOR_RETRY_MS, but a sensor that's simply "not connected yet"
-// shouldn't spam the log forever. SystemStatus::update() is the place that
-// announces an actual OK<->FAULT transition, once, when it happens.
-static bool initMax31856(bool verbose) {
-    if (!max31856.begin()) {
-        if (verbose) {
-            Serial.println("MAX31856: begin() failed - check SPI wiring (CS/SCK/MISO/MOSI) and power");
-        }
-        return false;
-    }
-    max31856.setThermocoupleType(MAX31856_TCTYPE_K);
-    max31856.setNoiseFilter(MAX31856_NOISE_FILTER_50HZ);
-
-    // begin() cannot detect whether a chip is actually present - SPI has no
-    // ACK mechanism the way I2C does, so it succeeds as long as the ESP32
-    // can toggle the pins, chip attached or not. Self-test instead: read
-    // back the register we just wrote, 3 times. A real chip echoes exactly
-    // what was written; a floating/absent MISO line echoes noise, unlikely
-    // to match 3 times running.
-    bool selfTestOk = true;
-    for (int i = 0; i < 3; i++) {
-        if (max31856.getThermocoupleType() != MAX31856_TCTYPE_K) {
-            selfTestOk = false;
-            break;
-        }
-        delay(2);
-    }
-
-    if (!selfTestOk) {
-        if (verbose) {
-            Serial.println("MAX31856: self-test FAILED - SPI clocked without error, but register "
-                            "readback doesn't match what was just written. No chip appears to be "
-                            "actually responding (likely not connected yet).");
-        }
-        return false;
-    }
-
-    if (verbose) {
-        Serial.println("MAX31856: initialized (K-type, 50Hz noise filter)");
-    }
-    return true;
 }
 
 static bool initBmp280(bool verbose) {
@@ -171,16 +131,28 @@ void Sensors::init() {
 
     Serial.println("--- Sensor init ---");
 
-    maxFault = !initMax31856(true);
+    // MAX6675's begin() returns void - it can't tell us whether a chip is
+    // actually present, only set up the pins. Presence/fault detection
+    // happens via read()'s status code instead, checked below and on every
+    // subsequent update() call.
+    SPI.begin(); // must be called before thermocouple.begin() (library requirement)
+    thermocouple.begin();
+
+    uint8_t maxStatus = thermocouple.read();
+    maxFault = (maxStatus != STATUS_OK);
+    if (maxFault) {
+        logMax6675Status(maxStatus);
+    } else {
+        Serial.printf("MAX6675: initialized, first reading %.1fC\n", thermocouple.getCelsius());
+    }
 
     bmpFault = !initBmp280(true);
 
-    Serial.printf("--- Sensor init done: MAX31856=%s  BMP280=%s ---\n",
+    Serial.printf("--- Sensor init done: MAX6675=%s  BMP280=%s ---\n",
         maxFault ? "FAULT" : "OK",
         bmpFault ? "FAULT" : "OK");
 
     unsigned long now = millis();
-    lastMaxRetryMs = now;
     lastBmpRetryMs = now;
     lastTrendMs = now;
 }
@@ -188,44 +160,40 @@ void Sensors::init() {
 void Sensors::update() {
     unsigned long now = millis();
 
-    // ---- MAX31856: retry periodically instead of latching the fault forever.
-    //      Silent (verbose=false) - a still-disconnected sensor shouldn't log
-    //      every 10s forever. SystemStatus reports the OK<->FAULT transition. ----
-    if (maxFault && (now - lastMaxRetryMs >= SENSOR_RETRY_MS)) {
-        lastMaxRetryMs = now;
-        maxFault = !initMax31856(false);
-    }
+    // ---- MAX6675: a read() is a fast SPI transaction (tens of microseconds),
+    //      unlike MAX31856's begin()-based self-test, so there's no need for
+    //      a retry timer here - just read every cycle and react to the
+    //      status. Logging is edge-triggered (only on OK<->FAULT
+    //      transitions), matching the "SystemStatus is the source of truth
+    //      for steady state" design used elsewhere in this file. ----
+    uint8_t status = thermocouple.read();
 
-    if (!maxFault) {
-        float raw = max31856.readThermocoupleTemperature();
-        uint8_t fault = max31856.readFault();
-
-        if (fault) {
-            // Adafruit_MAX31856 has no clearFault() - unlike the MAX31865 (RTD)
-            // library, the SR/fault register here reflects live state on each
-            // conversion, so there's nothing to explicitly clear. Just mark
-            // faulted; the retry loop above will re-check on the next cycle.
-            // This DOES print (it's a runtime fault on a sensor that was
-            // previously working, not a background retry on one that never
-            // connected - worth knowing about immediately).
+    if (status == STATUS_OK) {
+        float raw = thermocouple.getCelsius();
+        if (isnan(raw) || raw < TEMP_SENSOR_MIN_C || raw > TEMP_SENSOR_MAX_C) {
+            if (!maxFault) {
+                Serial.printf("MAX6675: reading %.1fC out of plausible range, treating as fault\n", raw);
+            }
             maxFault = true;
             exhaustTempFiltered = NAN;
-            logMax31856Fault(fault);
-        } else if (isnan(raw) || raw < TEMP_SENSOR_MIN_C || raw > TEMP_SENSOR_MAX_C) {
-            maxFault = true;
-            exhaustTempFiltered = NAN;
-            Serial.printf("MAX31856: reading %.1fC out of plausible range, treating as fault\n", raw);
         } else {
-            bool wasFaulted = !historyFilled && flueIdx == 0; // first good reading after init
+            bool wasFaulted = maxFault;
             flueHistory[flueIdx % 5] = raw;
             flueIdx++;
             if (flueIdx >= 5) historyFilled = true;
             exhaustTempFiltered = historyFilled ? medianOf5(flueHistory) : raw;
+            maxFault = false;
             if (wasFaulted) {
-                Serial.printf("MAX31856: first valid reading %.1fC\n", raw);
+                Serial.printf("MAX6675: first valid reading %.1fC\n", raw);
             }
         }
     } else {
+        if (!maxFault) {
+            // just transitioned from OK to faulted - worth logging immediately,
+            // as opposed to a sensor that was never connected in the first place
+            logMax6675Status(status);
+        }
+        maxFault = true;
         exhaustTempFiltered = NAN;
     }
 
@@ -244,7 +212,8 @@ void Sensors::update() {
         }
     }
 
-    // ---- BMP280: same silent-retry pattern ----
+    // ---- BMP280: silent-retry pattern (begin() is heavier than a plain
+    //      read, so this one still uses the SENSOR_RETRY_MS gate) ----
     if (bmpFault && (now - lastBmpRetryMs >= SENSOR_RETRY_MS)) {
         lastBmpRetryMs = now;
         bmpFault = !initBmp280(false);
