@@ -73,7 +73,7 @@ constexpr const char* MQTT_TOPIC_PHASE = "firecontroller/phase";            // p
 // ---------------- Timing (ms) ----------------
 constexpr unsigned long BUTTON_DEBOUNCE_MS = 50;
 constexpr unsigned long DISPLAY_REFRESH_MS = 250;
-constexpr unsigned long DISPLAY_PAGE_ROTATE_MS = 10000;
+constexpr unsigned long DISPLAY_PAGE_ROTATE_MS = 5000;
 constexpr unsigned long MQTT_PUBLISH_MS = 2000;
 constexpr unsigned long WIFI_RETRY_MS = 5000;
 constexpr unsigned long MQTT_RETRY_MS = 5000;

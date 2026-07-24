@@ -46,7 +46,7 @@ bool Display::isOk() { return oledOk; }
 
 static void drawLiveScreen() {
     oled.setCursor(0, 0);
-    oled.println("FireController v1.2");
+    oled.println("FireController v1.3");
 
     oled.setCursor(0, 12);
     oled.printf("Exhaust: %.0fC  d:%+.1f", Sensors::getExhaustTemp(), Sensors::getExhaustTrend());
